@@ -1,22 +1,42 @@
-# 🧠 Project: Veterinary Prescription Hub (Updated State)
+# 🧠 Project: Veterinary Prescription Hub (Updated State – End of Session)
 
 ## 🔹 Overview
 Cloud-based veterinary prescription system designed to:
 - Issue prescriptions
-- Allow pharmacies to verify and claim prescriptions
+- Allow pharmacies to verify and redeem prescriptions
 - Prevent duplication and fraud
 - Maintain a full audit trail
-- Support partial dispensing (next phase)
+- Support pharmacy-triggered partial dispensing
+- Preserve low-friction workflows for both practices and pharmacies
 
 Core flow:
-Issue → Check → Claim → Audit → Flag → Void/Supersede → (Next: Partial Dispense)
+Issue → Check → Claim (simple full-redemption path) → Audit → Flag → Void/Supersede
+
+or
+
+Issue → Start Partial Dispense → Continue Partial Dispense → Get State → Audit
+
+---
+
+## 🧠 Product Philosophy (CRITICAL)
+
+> Frictionless by default, structured only when needed.
+
+- No unnecessary data entry for practices
+- No unnecessary friction for pharmacies
+- Prescriptions remain unstructured unless partial dispensing begins
+- Once partial dispensing begins, the entire prescription must be itemised
+- Controlled drugs may be flagged, but should not have mandatory extra workflow enforced by the hub at this stage
 
 ---
 
 ## 🗄️ Core Tables
 
 - prescriptions
-- prescription_claims (currently underused)
+- prescription_items
+- prescription_item_dispenses
+- dispense_sessions ✅ NEW
+- prescription_claims (currently underused / likely redundant)
 - claims_audit
 - pharmacies
 - pharmacy_api_keys
@@ -32,178 +52,24 @@ Issue → Check → Claim → Audit → Flag → Void/Supersede → (Next: Parti
 - id (uuid, PK)
 - rx_code (text, UNIQUE)
 - status (ISSUED / CLAIMED / DISPENSED / EXPIRED)
-- claimed_by (text)
-- claimed_by_pharmacy_id (uuid FK → pharmacies.id) ✅ now correctly populated
-- claimed_at (timestamp)
-- issued_by (text)
-- patient_name (text)
-- drug_summary (text)
-- issued_at (timestamp, NOT NULL) ✅ now set correctly
-- validity_mode (PRESET / CUSTOM) ✅ now used
-- validity_days (int) ✅ now used
-- expires_at (derived via trigger)
-- supersedes_id (self FK)
+- claimed_by
+- claimed_by_pharmacy_id (uuid FK → pharmacies.id) ✅
+- claimed_at
+- issued_by
+- patient_name
+- drug_summary (unstructured)
+- issued_at ✅
+- validity_mode ✅
+- validity_days ✅
+- expires_at (trigger-derived)
+- supersedes_id
 - voided_at / void_reason
+- is_controlled_drug (planned / should exist if added)
 - attachment fields
 
----
+### prescription_items
+Used only once partial dispensing begins.
 
-### claims_audit
-- append-only audit log
-- records ALL events:
-  - CHECK_OK
-  - CLAIM_SUCCESS
-  - CLAIM_EXPIRED
-  - CLAIM_ALREADY_CLAIMED
-  - CLAIM_RACE_LOST
-  - CLAIM_VOIDED ✅ now standardised
-- includes:
-  - prescription_id
-  - pharmacy_id
-  - rx_code
-  - result
-  - errcode
-  - message
-  - billable
-- ⚠️ created_at column recommended (not yet confirmed present)
-
----
-
-### pharmacy_api_keys
-- stores SHA256 hash of API keys
-- links to pharmacy_id
-- includes:
-  - is_active
-  - last_used_at
-
----
-
-## ⚙️ Core Functions (Now Aligned)
-
-### issue_prescription ✅ FIXED
-- sets:
-  - issued_at = now()
-  - validity_mode
-  - validity_days
-- NO longer accepts expires_at directly
-- expiry derived via trigger
-
----
-
-### claim_prescription_with_key ✅ FIXED
-- uses standardised API key hashing
-- resolves pharmacy via API key
-- sets:
-  - claimed_by
-  - claimed_by_pharmacy_id ✅ FIXED
-  - claimed_at
-- atomic update prevents race conditions
-- writes CLAIM_SUCCESS audit row
-
----
-
-### check_prescription_with_key ✅ CLEANED
-- consistent hashing
-- returns claimability state
-- logs CHECK_* audit events
-
----
-
-### create_pharmacy_api_key ✅ FIXED
-- uses standardised hashing:
-  extensions.digest(convert_to(v_key, 'utf8'), 'sha256')
-- returns raw API key once
-- stores only hash
-
----
-
-### flag_prescription_issue_with_key ✅ FIXED
-- hashing now consistent
-- API key validation aligned with other functions
-- logs flags correctly
-
----
-
-### void_and_supersede_prescription ✅ FIXED
-- audit codes corrected:
-  - SUCCESS → CLAIM_SUCCESS
-  - VOIDED → CLAIM_VOIDED
-- old prescription:
-  - voided_at set
-  - void_reason set
-- new prescription:
-  - supersedes_id links to old
-- prior CLAIM_SUCCESS rows set to billable = false
-
----
-
-## 🔐 Access Model
-
-- Function-based access (SECURITY DEFINER)
-- Minimal RLS (only prescription_flags currently)
-- Pharmacy authentication via API key
-
----
-
-## 🔑 Key Design Decisions
-
-- rx_code is the public identifier
-- prescription clinical data is immutable
-- operational fields remain mutable
-- expiry derived from issued_at + validity_days
-- API keys stored hashed only
-- claims are atomic and race-condition safe
-- audit log is append-only
-- pharmacy identity is UUID-based (not text)
-- supersession handled via self-referencing FK
-
----
-
-## 🔄 Triggers
-
-- prevent_prescription_mutation
-- prevent_created_at_update
-- prevent_prescriber_change
-- prevent_validity_change_after_claim
-- set_expires_at_from_validity
-
----
-
-## 🚨 Known Issues / TODO (Updated)
-
-### Minor
-- claims_audit likely missing created_at → should be added
-
-### Structural
-- prescription_claims table likely redundant vs claims_audit (to review)
-
----
-
-## 🧠 Current Architecture Summary
-
-1. Prescription issued → immutable record created
-2. Pharmacy authenticates via API key
-3. Prescription checked for validity
-4. Atomic claim prevents duplication
-5. Audit log records ALL events
-6. Flags allow exception handling
-7. Prescriptions can be voided and superseded cleanly
-
----
-
-## 🚀 Next Phase: Partial Dispensing (Agreed Direction)
-
-### Key Requirement
-Support:
-- multiple medicines per prescription
-- partial redemption over time
-- multiple pharmacies dispensing different items
-
----
-
-## 🧩 Proposed New Tables
-
-### prescription_items (NEW)
 - id
 - prescription_id
 - line_number
@@ -211,66 +77,164 @@ Support:
 - quantity_prescribed
 - quantity_dispensed
 - quantity_remaining
-- status (ISSUED / PARTIAL / DISPENSED / EXPIRED)
+- status (ISSUED / PARTIALLY_DISPENSED / DISPENSED)
 
----
+### prescription_item_dispenses
+Ledger rows for each item dispense event.
 
-### prescription_item_dispenses (NEW)
 - id
 - prescription_item_id
 - prescription_id
 - pharmacy_id
 - quantity_dispensed
 - dispensed_at
+- created_at
 - billable
+- dispense_session_id ✅ NEW FK to dispense_sessions.id
+
+### dispense_sessions ✅ NEW
+Groups multiple dispense rows that belong to the same pharmacy interaction.
+
+- id
+- prescription_id
+- pharmacy_id
 - created_at
 
----
+Purpose:
+- allows multiple item dispense rows from one pharmacy interaction to be treated as one future billing unit if desired
+- preserves flexibility for later billing design
 
-## 🧠 Key Design Decision (CRITICAL)
+### claims_audit
+Append-only audit log.
 
-👉 Ledger must operate at item level, not prescription level
+Includes:
+- prescription_id
+- pharmacy_id
+- rx_code
+- result
+- errcode
+- message
+- billable
+- created_at (should exist / recommended)
 
-This supports:
-- multi-drug prescriptions
-- independent partial dispensing
-- accurate audit trails
-- regulatory defensibility
-
----
-
-## 🔄 Future Flow (Planned)
-
-Issue → Items created →  
-Pharmacy selects item →  
-Dispense quantity →  
-Ledger updated →  
-Remaining balance tracked  
-
----
-
-## 📌 Next Build Steps
-
-1. Create prescription_items table
-2. Create prescription_item_dispenses table
-3. Update issue flow to create items
-4. Update claim logic → item + quantity based
-5. Derive prescription status from item states
-6. Introduce billing per dispense event
+Audit result constraint was broadened to allow:
+- CHECK_*
+- CLAIM_*
+- DISPENSE_*
+- PARTIAL_DISPENSE_*
 
 ---
 
-## 🧠 Strategic Position
+## ⚙️ Functions (Current State)
 
-System now has:
-- robust auditability
-- fraud prevention
-- relational pharmacy tracking
-- supersession logic
-- strong foundation for controlled-drug workflows
+### issue_prescription ✅ FIXED
+- sets issued_at
+- sets validity_mode
+- sets validity_days
+- no longer accepts expires_at directly
+- expiry derived by trigger
 
-Next phase (partial dispensing) will:
-- significantly increase real-world usability
-- differentiate product from competitors
-- align with both practice and pharmacy workflo
+### check_prescription_with_key ✅
+- validates pharmacy API key
+- checks prescription existence / expiry / claimability
+- logs CHECK_* audit events
+
+### claim_prescription_with_key ✅
+Current simple full-redemption path.
+- validates API key
+- atomically claims prescription
+- sets claimed_by, claimed_by_pharmacy_id, claimed_at
+- logs CLAIM_SUCCESS
+- currently serves as practical “full dispense” path, though naming may later be cleaned up
+
+### create_pharmacy_api_key ✅
+- standardised SHA256 hashing:
+  `extensions.digest(convert_to(v_key, 'utf8'), 'sha256')`
+- returns raw key once
+- stores only hashed key
+
+### flag_prescription_issue_with_key ✅
+- hashing aligned
+- writes flags correctly
+
+### void_and_supersede_prescription ✅
+- corrected audit codes:
+  - CLAIM_SUCCESS
+  - CLAIM_VOIDED
+- old prescription voided
+- new prescription links via supersedes_id
+- prior CLAIM_SUCCESS rows made non-billable
+
+### start_partial_dispense_with_key ✅ NEW
+Pharmacy-triggered start of ledger mode.
+
+- validates API key
+- validates prescription
+- accepts full item list as JSON
+- creates all `prescription_items`
+- creates first `prescription_item_dispenses` rows
+- updates parent prescription status
+- writes `PARTIAL_DISPENSE_START` audit row
+
+Rule enforced:
+> If partial dispensing begins, the entire prescription must be itemised.
+
+Current note:
+- function works
+- not yet updated to populate `dispense_session_id`
+- next session should update it to create one `dispense_sessions` row and apply that session id to all dispense rows created in the function
+
+### continue_partial_dispense_with_key ✅ NEW
+Used after ledger mode already exists.
+
+- validates API key
+- validates prescription/item
+- enforces remaining quantity
+- inserts additional dispense ledger row
+- updates item totals
+- updates parent prescription status
+- writes `PARTIAL_DISPENSE_CONTINUE` audit row
+
+Current note:
+- function works
+- not yet updated to populate `dispense_session_id`
+- next session should update it to create a new `dispense_sessions` row for each continuation interaction and attach that id to the new dispense row
+
+### get_prescription_state_with_key ✅ NEW
+Critical pharmacy-facing state retrieval function.
+
+Returns:
+
+#### If not itemised yet:
+- mode = unstructured
+- status
+- expires_at
+- drug_summary
+
+#### If itemised:
+- mode = structured
+- status
+- expires_at
+- full list of items with:
+  - drug_description
+  - quantity_prescribed
+  - quantity_dispensed
+  - quantity_remaining
+  - status
+
+This is the key function that allows later pharmacies to safely see what remains.
+
+---
+
+## ❌ Deprecated / Remove
+
+### dispense_prescription_partial_with_key
+- deprecated
+- not aligned with final design
+- assumed pre-existing items
+- should be dropped if still present
+
+Recommended drop:
+```sql
+drop function if exists public.dispense_prescription_partial_with_key(text, text, uuid, numeric);
 Use this as the source of truth for the current Prescription Hub state. Do not assume anything else unless I provide code.
