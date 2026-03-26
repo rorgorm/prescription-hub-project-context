@@ -1,46 +1,36 @@
 Veterinary Prescription Hub – Project Context
 
-📍 Project State (as of current session)
+📍 Project State
 
 This project is a cloud-based veterinary prescription system designed to prevent fraud, duplication, and unsafe dispensing by using a centralised, auditable dispensing ledger.
 
-The system has now transitioned from a claim/lock model to a multi-pharmacy shared dispensing model.
+The system has moved from a claim/lock model to a multi-pharmacy dispensing model.
+
+Core principle:
+	•	no pharmacy ownership / no locking
+	•	multiple pharmacies can dispense against the same prescription
+	•	all dispensing is tracked as append-only events
 
 ⸻
 
-🧠 Core Architectural Model
+✅ Current Prescription Status Model
 
-Previous (deprecated)
-	•	Prescription could be CLAIMED
-	•	First pharmacy to claim locked out all others
-
-Current (live model)
-	•	No ownership / no locking
-	•	Multiple pharmacies can dispense against the same prescription
-	•	All dispensing is tracked as append-only events
-
-👉 This is now a distributed dispensing ledger
-
-⸻
-
-📊 Prescription Status Model
-
-Allowed values (prescriptions.status)
+Allowed values in prescriptions.status:
 	•	ISSUED
 	•	PARTIALLY_DISPENSED
 	•	FULLY_DISPENSED
 	•	EXPIRED
 	•	VOIDED
 
-Notes
-	•	CLAIMED has been fully removed
+Notes:
+	•	CLAIMED has been retired from the live model
 	•	DISPENSED replaced with FULLY_DISPENSED
 
 ⸻
 
-📦 Item Status Model
+✅ Current Item Status Model
 
-Allowed values (prescription_items.status)
+Allowed values in prescription_items.status:
 	•	ISSUED
 	•	PARTIALLY_DISPENSED
 	•	FULLY_DISPENSED
@@ -49,25 +39,43 @@ Allowed values (prescription_items.status)
 
 ⸻
 
-🧾 Key Database Tables
+🧾 Key Tables
 
 prescriptions
+
+Important columns now include:
 	•	id
 	•	rx_code
 	•	status
 	•	issued_by
-	•	drug_summary
-	•	created_at
 	•	issued_at
+	•	created_at
 	•	expires_at
+	•	practice_id
+	•	prescriber_id
 	•	validity_mode
 	•	validity_days
 	•	is_controlled_drug
 
-Completion fields (replaces claimed_*)
+Completion fields:
 	•	fully_dispensed_by
 	•	fully_dispensed_by_pharmacy_id
 	•	fully_dispensed_at
+
+Original attachment fields
+	•	attachment_path
+	•	attachment_mime_type
+	•	attachment_uploaded_at
+
+Preview attachment fields
+	•	preview_attachment_path
+	•	preview_attachment_mime_type
+	•	preview_attachment_uploaded_at
+
+Dispense attachment fields
+	•	dispense_attachment_path
+	•	dispense_attachment_mime_type
+	•	dispense_attachment_uploaded_at
 
 ⸻
 
@@ -103,167 +111,397 @@ Logical grouping of actions
 	•	prescription_id
 	•	pharmacy_id
 	•	created_at
-	•	session_type:
+	•	billable
+	•	session_type
 	•	FULL
 	•	PARTIAL_START
 	•	PARTIAL_CONTINUE
 
 ⸻
 
-pharmacy_api_keys
-	•	pharmacy_id
-	•	key_hash
-	•	is_active
-	•	last_used_at
+dispense_audit
+
+Renamed from claims_audit
+
+Used for:
+	•	auth failures
+	•	preview readiness / checks
+	•	full dispense outcomes
+	•	partial dispense events
+	•	non-billable document unlock events
+
+Important result values currently allowed:
+	•	AUTH_FAILED
+	•	CHECK_READY
+	•	CHECK_VOIDED
+	•	FULL_DISPENSE_ALREADY_COMPLETED
+	•	FULL_DISPENSE_NOT_FOUND
+	•	FULL_DISPENSE_SUCCESS
+	•	FULL_DISPENSE_VOIDED
+	•	FULL_DISPENSE_NOT_ALLOWED_ON_ITEMISED
+	•	FULL_DISPENSE_EXPIRED
+	•	FULL_DISPENSE_RACE_LOST
+	•	PARTIAL_DISPENSE_START
+	•	PARTIAL_DISPENSE_CONTINUE
+	•	DISPENSE_ATTACHMENT_UNLOCKED
 
 ⸻
 
 🔐 Authentication Model
-	•	Pharmacies authenticate using API keys
-	•	Keys are stored as SHA256 hashes
-	•	Raw key is only known at creation time
-	•	API key determines:
-	•	pharmacy identity
+
+Pharmacies authenticate using API keys.
+	•	keys stored as SHA256 hashes
+	•	raw key only known at creation
+	•	API key resolves pharmacy identity
+	•	used for:
+	•	authorisation
+	•	audit attribution
 	•	billing attribution
-	•	audit logs
 
 ⸻
 
-⚙️ Core RPC Functions
+⚙️ Current Core RPC / DB Functions
 
-1. get_prescription_state_with_key
-	•	Returns:
+get_prescription_state_with_key
+
+Returns:
 	•	mode: unitemised / itemised
 	•	status
 	•	expiry
-	•	item list (if itemised)
+	•	items if itemised
+
+No audit-writing changes needed here.
 
 ⸻
 
-2. start_partial_dispense_with_key
-	•	Converts unitemised → itemised
-	•	Creates prescription_items
-	•	Creates dispense records
-	•	Sets prescription status:
-	•	PARTIALLY_DISPENSED or FULLY_DISPENSED
+full_dispense_prescription_with_key
+
+Current rules:
+	•	only works for unitemised prescriptions
+	•	if prescription is already itemised, returns:
+	•	P3014
+	•	Full dispense is only allowed for unitemised prescriptions
+
+Uses:
+	•	FULL_DISPENSE_* audit terminology
+	•	no CLAIM_* terminology
 
 ⸻
 
-3. continue_partial_dispense_with_key
-	•	Adds dispense to existing item
-	•	Validates:
-	•	cannot exceed remaining quantity
-	•	Updates:
-	•	item totals
-	•	prescription status
+start_partial_dispense_with_key
+	•	itemises an unitemised prescription
+	•	creates item rows
+	•	creates dispense records
+	•	sets prescription to:
+	•	PARTIALLY_DISPENSED
+	•	or FULLY_DISPENSED
 
 ⸻
 
-4. full_dispense_prescription_with_key
-	•	Marks entire prescription as completed
-	•	Sets:
-	•	status = FULLY_DISPENSED
-	•	fully_dispensed_* fields
-	•	Creates FULL dispense session
+continue_partial_dispense_with_key
+	•	records further dispensing against remaining quantities
+	•	allows different pharmacies to continue dispensing
+	•	blocks over-dispensing
 
 ⸻
 
-🖥️ Frontend (Pharmacy Test Page)
+check_prescription_with_key
 
-Key behaviours
+Cleaned to remove claim terminology.
+Uses:
+	•	CHECK_READY
+	•	FULL_DISPENSE_ALREADY_COMPLETED
+	•	etc.
+
+⸻
+
+get_prescription_preview_attachment_with_key
+
+Returns the preview PDF path/mime type.
+Used for:
+	•	pharmacy preview screen
+	•	owner preview in future
+
+Checks:
+	•	valid pharmacy API key
+	•	prescription exists
+	•	not expired
+	•	not voided
+	•	preview_attachment_path is present
+
+⸻
+
+get_prescription_dispense_attachment_with_key
+
+Returns the dispense PDF path/mime type.
+Used when:
+	•	Start Partial Dispense
+	•	Continue Partial Dispense
+	•	Dispense All Remaining
+	•	Full Dispense (after successful completion)
+
+Checks:
+	•	valid pharmacy API key
+	•	prescription exists
+	•	not expired
+	•	not voided
+	•	dispense_attachment_path is present
+
+Also writes a non-billable audit event:
+	•	DISPENSE_ATTACHMENT_UNLOCKED
+	•	billable = false
+
+This means un-watermarked dispense PDF access is now trackable even if pharmacy later clicks cancel.
+
+⸻
+
+attach_preview_attachment
+
+Sets:
+	•	preview_attachment_path
+	•	preview_attachment_mime_type
+	•	preview_attachment_uploaded_at
+
+⸻
+
+attach_dispense_attachment
+
+Sets:
+	•	dispense_attachment_path
+	•	dispense_attachment_mime_type
+	•	dispense_attachment_uploaded_at
+
+⸻
+
+issue_prescription
+
+Old overloaded versions existed. Legacy one using expires_at directly was dropped.
+
+Current intended upload model:
+	•	every prescription gets an RX code at creation
+	•	no patient name or drug summary required for v1
+	•	practice + prescriber required
+	•	validity comes from practice default unless overridden
+	•	controlled drug flag stored
+	•	upload remains unitemised
+
+Practice defaults:
+	•	practices.default_validity_days added
+	•	constrained to 1–180
+
+Current behaviour:
+	•	if practice default used → validity_mode = 'PRESET'
+	•	if uploader overrides → validity_mode = 'CUSTOM'
+
+⸻
+
+🖥️ Current Pharmacy Test Page Behaviour
 
 Preview
-	•	Always required before any action
-	•	Displays:
-	•	prescription status
-	•	expiry
-	•	item breakdown
+	•	shows prescription summary
+	•	shows watermarked preview PDF
+	•	uses get_prescription_preview_attachment_with_key
 
-Unitemised prescriptions
-	•	Buttons:
+Unitemised prescription actions
 	•	Dispense Full Prescription
 	•	Start Partial Dispense
 
-Itemised prescriptions (with remaining quantities)
-	•	Buttons:
+Itemised prescription actions
 	•	Continue Partial Dispense
 	•	Dispense All Remaining Items
 
-⸻
+Dispense workflows
+	•	now show dispense PDF
+	•	uses get_prescription_dispense_attachment_with_key
 
-✨ UX Improvements Implemented
+Cancel behaviour
 
-1. Dispense All Remaining Items
-	•	Auto-fills remaining quantities
-	•	Allows quick completion
-
-2. Validation (frontend + backend)
-	•	Cannot exceed remaining quantity
-	•	Clear error messages before submission
-
-⸻
-
-🧪 Tested Scenarios
-	•	Full dispense from fresh prescription ✅
-	•	Partial dispense (single pharmacy) ✅
-	•	Continue partial dispense (same pharmacy) ✅
-	•	Continue partial dispense (different pharmacy) ✅
-	•	Over-dispense attempt blocked ✅
-	•	Full completion after partial dispense ✅
+This was fixed:
+	•	when user cancels after opening a dispense workflow:
+	•	partial form disappears
+	•	unlocked dispense PDF disappears
+	•	preview PDF disappears
+This prevents lingering access after cancel.
 
 ⸻
 
-🚨 Important Design Principles
-	1.	No locking
-	•	No pharmacy “owns” a prescription
-	2.	Event-driven ledger
-	•	Every dispense recorded independently
-	3.	State = derived
-	•	Status reflects aggregate of item states
-	4.	Safety-first validation
-	•	Cannot exceed prescribed quantities
+✅ Current Document Architecture
+
+This is the key new design:
+
+1. Original upload
+
+Stored unchanged for record:
+	•	PDF stays PDF
+	•	image stays image
+
+2. Preview copy
+
+Always a watermarked PDF
+Used for:
+	•	pharmacy preview
+	•	owner preview
+
+3. Dispense copy
+
+Always a clean PDF
+Used for:
+	•	all pharmacy dispense workflows
+
+Reason:
+	•	avoids device/file-format compatibility issues
+	•	pharmacies always receive a PDF
+	•	original remains preserved for record
 
 ⸻
 
-🔜 Next Planned Feature
+✅ Watermark Design Choice
 
-Dispense History in UI
+Chosen watermark design:
+	•	red
+	•	repeated
+	•	diagonal
+	•	obvious
+	•	includes RX code
 
-Goal:
-	•	Show which pharmacy dispensed each portion
+Current implementation works, but watermark needs refinement:
+	•	current version is too dense
+	•	words overlap and become illegible
+	•	watermark should cover more of the page without overlapping
 
-Example:
-Prascend 1 mg tablets
+Next planned code change
 
-Dispense history:
-- 100 → Pharmacy X → 18 Mar
-- 50  → Pharmacy Y → 23 Mar
+Replace the current applyPreviewWatermark function in server.js with a version that:
+	•	uses shorter repeated stamps:
+	•	PREVIEW ONLY
+	•	NOT VALID FOR DISPENSING
+	•	RX-<code>
+	•	spaces them more cleanly
+	•	keeps strong red coverage without overlap
 
-- This will use:
-	•	prescription_item_dispenses
-	•	pharmacy_id → pharmacy name join
+The replacement function was already drafted in chat, but not yet applied/tested.
 
 ⸻
 
-🧭 Future Roadmap (High Level)
-	1.	Dispense history UI
-	2.	Soft warnings for edge-case over-dispensing
-	3.	Owner-facing prescription view
-	4.	PDF watermark / anti-fraud layer
-	5.	Billing aggregation per pharmacy
-	6.	API / partner integrations
+✅ Processing Service Prototype
+
+A local Node-based processing service has been built in folder:
+	•	prescription-processor
+
+Files created
+	•	package.json
+	•	.env
+	•	server.js
+
+Installed dependencies
+	•	@supabase/supabase-js
+	•	dotenv
+	•	express
+	•	pdf-lib
+	•	sharp
+
+Current service behaviour
+
+Endpoint:
+	•	POST /process-prescription-attachments
+
+Input:
+	•	rx_code
+	•	original_path
+	•	original_mime_type
+
+It:
+	1.	loads prescription by RX code
+	2.	downloads original file from storage
+	3.	if original is PDF:
+	•	keeps/re-saves as clean PDF
+	4.	if original is image:
+	•	converts image into PDF
+	5.	creates:
+	•	dispense.pdf
+	•	preview.pdf
+	6.	uploads both to:
+	•	<prescription-id>/dispense.pdf
+	•	<prescription-id>/preview.pdf
+	7.	copies original to canonical:
+	•	<prescription-id>/original.<ext>
+	8.	updates prescription DB row fields automatically
+
+Canonical storage layout now in use
+
+Within prescription-attachments bucket:
+	•	<prescription-id>/original.<ext>
+	•	<prescription-id>/dispense.pdf
+	•	<prescription-id>/preview.pdf
+
+⸻
+
+✅ Verified Working Example
+
+For test prescription RX-613fc162, processor successfully produced:
+	•	cb877bb6-4625-4f3c-8113-6ea47caa2aa2/original.pdf
+	•	cb877bb6-4625-4f3c-8113-6ea47caa2aa2/dispense.pdf
+	•	cb877bb6-4625-4f3c-8113-6ea47caa2aa2/preview.pdf
+
+And pharmacy page correctly showed:
+	•	Preview → generated preview.pdf
+	•	Start Partial → generated dispense.pdf
+
+This is a major milestone.
+
+⸻
+
+✅ Storage / Format Decisions
+
+Allowed original uploads should ultimately include:
+	•	PDF
+	•	JPG / JPEG
+	•	PNG
+	•	HEIC / HEIF if feasible
+
+System policy:
+	•	store original unchanged
+	•	always generate preview as PDF
+	•	always generate dispense copy as PDF
+
+This avoids pharmacy device compatibility problems.
+
+⸻
+
+🚧 Next Planned Steps
+
+Immediate next step
+
+Apply the improved non-overlapping watermark function in server.js, restart processor, and re-process a test prescription.
+
+Then
+
+Wire the processing service into the practice upload flow so that after upload:
+	1.	original file uploaded
+	2.	processor called automatically
+	3.	preview and dispense PDFs created automatically
+	4.	prescription row updated automatically
+
+After that
+
+Potential future enhancements:
+	•	owner-facing preview page
+	•	stronger anti-forgery watermark pattern
+	•	OCR / AI extraction from uploads
+	•	queue/retry system for document processing
+	•	production deployment of processor service
 
 ⸻
 
 🧩 Notes for Future Sessions
-	•	Always confirm:
-	•	function names
-	•	schema constraints
-	•	status enums
-	•	Avoid reintroducing:
-	•	CLAIMED model
-	•	Assume:
-	•	multi-pharmacy is core behaviour
+
+Important reminders:
+	•	do not reintroduce claim terminology
+	•	dispense_audit is the live audit table name
+	•	preview and dispense are now deliberately split
+	•	original file should not be shown directly to pharmacies in normal workflow
+	•	if a bug appears showing wrong document, check browser cache / stale HTML first
+	•	full HTML rewrites are often preferable to piecemeal frontend edits for this project
 
 ⸻
 
@@ -271,7 +509,8 @@ Dispense history:
 
 This system now functions as:
 
-A multi-pharmacy, centralised, auditable prescription dispensing ledger
+A multi-pharmacy, centralised, auditable prescription dispensing ledger with a three-layer document model:
+original record copy, watermarked preview PDF, and clean dispense PDF.
 
-This is a major architectural milestone and forms the foundation for all future features.
+The core dispensing/document architecture is now working end-to-end.
 :::
