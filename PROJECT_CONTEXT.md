@@ -1,172 +1,245 @@
-# 🧾 Veterinary Prescription Hub – PROJECT_CONTEXT.md
+Project Context – Prescription Processing System (MVP)
 
-## 🔄 Last Updated
-Date: 2026-03-30
+Last Updated
 
----
+2026-03-31
 
-## ✅ Current System State
+Overview
 
-### 🧱 Core Architecture
-- Supabase (Postgres + Storage) is the source of truth
-- Local Node.js processing service (server.js) runs on:
-  - http://localhost:3000
-- No Edge Functions in use
-- Processing is triggered manually via HTTP POST (curl)
+This project is a minimal end-to-end prescription processing system designed to demonstrate:
+	•	Practice-side prescription issuing
+	•	Backend processing and validation
+	•	Pharmacy-side preview and dispense flow
 
----
+The system is intentionally simple, with minimal infrastructure and no reliance on local tools or manual database interaction.
 
-## 📦 Attachment Processing Pipeline (WORKING ✅)
+Architecture
 
-### Flow
-1. Upload original file to Supabase Storage (e.g. test-prescription-X.pdf)
-2. Create prescription via:
-   issue_prescription(...)
-3. Manually trigger processor:
+Frontend (Practice)
+	•	File: practice.html
+	•	Runs locally in browser
+	•	Allows user to:
+	•	Select prescriber
+	•	Select validity period
+	•	Mark as controlled drug
+	•	Upload prescription PDF
+	•	Submit in a single action
 
-   POST /process-prescription-attachments
-   Authorization: Bearer PROCESSOR_SECRET
+Backend
+	•	Node.js (Express) server hosted on Railway
+	•	Main endpoints:
+	•	POST /api/issue-and-process
+	•	POST /process-prescription-attachments
+	•	GET /health
 
-4. Processor performs:
-   - Download original file
-   - Convert to clean PDF (if needed)
-   - Generate:
-     - dispense.pdf (clean)
-     - preview.pdf (watermarked)
-   - Upload both to:
-     {prescription_id}/dispense.pdf
-     {prescription_id}/preview.pdf
-   - Update DB fields:
-     - attachment_path → canonical original
-     - preview_attachment_path
-     - dispense_attachment_path
+Responsibilities of /api/issue-and-process:
+	•	Validate request
+	•	Call Supabase RPC to issue prescription
+	•	Trigger processing logic
+	•	Return Rx code and processed attachment paths
 
----
+Responsibilities of /process-prescription-attachments:
+	•	Process an already-issued prescription
+	•	Generate preview and dispense PDFs
+	•	Update database attachment fields
 
-## 🖨️ Watermark System (FINAL VERSION ✅)
+Database & Storage (Supabase)
+	•	PostgreSQL database with RPC functions
+	•	Storage bucket:
+	•	prescription-attachments
 
-### Style
-- Horizontal (not diagonal)
-- Dense, edge-to-edge coverage
-- Repeating phrase:
-  RX_CODE - PREVIEW ONLY - NOT VALID FOR DISPENSING
-- Brick-layer (staggered) pattern applied
+Current Working State
 
-### Parameters
-- fontSize = 12
-- opacity = 0.16
-- rowGap = 22
-- offsetAmount = unitWidth / 2
+The following are now working:
+	•	Practice-side upload from practice.html
+	•	Practice-side issue-and-process via hosted Railway backend
+	•	Railway deployment is live and no longer dependent on local laptop server
+	•	Prescription processing generates:
+	•	canonical original attachment path
+	•	preview PDF
+	•	dispense PDF
+	•	Existing pharmacy-side HTML remains separate and continues to handle preview/dispense flow
+	•	Manual SQL and manual curl are no longer required for the practice-side issuing workflow
 
-### Key Implementation Detail
-Offset is based on unit text width, not full repeated line:
-const unitWidth = font.widthOfTextAtSize(unitText + separator, fontSize);
-const offsetAmount = unitWidth / 2;
+Practice UI (Minimal Friction MVP)
 
-### Result
-- Strong anti-copy visual protection
-- Even page coverage
-- Professional “security paper” appearance
+Current inputs on practice.html:
+	•	Prescriber
+	•	Validity period
+	•	Controlled drug checkbox
+	•	defaults to No
+	•	Prescription PDF upload
 
----
+Current behaviour:
+	1.	User selects prescriber
+	2.	User selects validity period
+	3.	User optionally ticks controlled drug
+	4.	User uploads PDF
+	5.	User clicks “Upload and issue prescription”
+	6.	Frontend uploads file to Supabase Storage
+	7.	Frontend calls Railway backend /api/issue-and-process
+	8.	Backend issues prescription and processes files
+	9.	UI returns Rx code
 
-## 🧠 Key Lessons Learned
+Pharmacy UI
 
-### ❌ What was wrong before
-- Watermark logic was fine
-- But processor was NOT being triggered
-- Led to:
-  - no preview generation
-  - no terminal activity
-  - null DB fields
+Existing pharmacy HTML is still used and remains separate from the practice UI.
 
-### ✅ Resolution
-- Manual curl call confirmed pipeline works
-- System architecture validated
-- Issue identified as missing trigger, not processing logic
+Purpose:
+	•	Enter or use Rx code
+	•	View watermarked preview
+	•	Dispense prescription
 
----
+This separation is intentional:
+	•	Practice UI = issue
+	•	Pharmacy UI = preview/dispense
 
-## ⚠️ Current Limitation
+Backend Hosting
 
-### 🚧 Processing is NOT automatic
-- Requires manual POST call to processor
-- No trigger on:
-  - prescription creation
-  - file upload
+Backend is now hosted on Railway.
 
----
+Public domain:
+	•	https://prescription-processor-production.up.railway.app
 
-## 🎯 Next Step (HIGH PRIORITY)
+Health endpoint:
+	•	/health
 
-### Automate processing trigger
+The processor is no longer dependent on local localhost.
 
-Goal:
-When a prescription is issued + file uploaded → processor runs automatically
+Environment Variables (Railway)
 
-### Options (to decide next session)
-1. Add call from issuing workflow (preferred)
-2. Add Supabase Edge Function trigger
-3. Add DB webhook / function trigger
-4. Keep manual trigger (not viable long-term)
+Required service-level variables:
+	•	SUPABASE_URL
+	•	SUPABASE_SERVICE_ROLE_KEY
+	•	PROCESSOR_SECRET
+	•	PRACTICE_UI_SECRET
+	•	BUCKET_NAME
 
----
+Notes:
+	•	Missing variables cause startup failure
+	•	A previous Railway crash was caused by missing PRACTICE_UI_SECRET
+	•	Variables must be correctly deployed at service level
 
-## 🔐 Environment Variables
+Security Model (Current MVP)
 
-Local .env:
+Current state:
+	•	Practice UI uses a shared secret via Authorization: Bearer ...
+	•	Backend validates PRACTICE_UI_SECRET
 
-SUPABASE_URL=...
-SUPABASE_SERVICE_ROLE_KEY=...
-PROCESSOR_SECRET=my-super-long-random-processor-secret-2026
-BUCKET_NAME=prescription-attachments
-PORT=3000
+Important limitation:
+	•	This secret is currently present in frontend code
+	•	This is acceptable only for controlled MVP/demo use
+	•	This is not the final production security model
 
----
+Future direction:
+	•	Replace shared secret with proper authentication
+	•	Add practice accounts and role-based access
 
-## 🧪 Testing Workflow (CURRENT)
+CORS
 
-1. Upload file (e.g. test-prescription-3.pdf)
-2. Run issue_prescription(...)
-3. Copy rx_code
-4. Run curl:
+CORS needed to be enabled because practice.html is browser-based and calls Railway directly.
 
-curl -X POST http://localhost:3000/process-prescription-attachments \
-  -H "Authorization: Bearer PROCESSOR_SECRET" \
-  -H "Content-Type: application/json" \
-  -d '{ ... }'
+This was required due to:
+	•	Browser preflight OPTIONS requests
+	•	Authorization header in fetch requests
 
-5. Confirm:
-   - preview + dispense paths populated
-6. Test via HTML Preview button
+Without proper CORS handling, browser showed:
+	•	“Load failed”
+	•	preflight 502 / blocked fetch errors
 
----
+Supabase Storage
 
-## 📌 System Status Summary
+Bucket:
+	•	prescription-attachments
 
-| Component                  | Status |
-|--------------------------|--------|
-| Prescription creation     | ✅ Working |
-| File upload               | ✅ Working |
-| Processing server         | ✅ Working |
-| Watermark generation      | ✅ Finalised |
-| Preview rendering         | ✅ Working |
-| Automatic processing      | ❌ Not implemented |
+Current relevant policy state:
+	•	Public read policy exists
+	•	Upload path is now working in the MVP flow
 
----
+Watermarking
 
-## 🚀 Position
+Watermark system is now in a good state and considered acceptable.
 
-You now have:
-- A fully functioning document pipeline
-- A production-grade watermark system
-- A clean separation of concerns
+Current watermark characteristics:
+	•	Horizontal
+	•	Dense
+	•	Edge-to-edge feel
+	•	Repeating phrase includes Rx code
+	•	Brick/stagger pattern
+	•	Final tuning accepted by user
 
-Next session will focus on:
-making it automatic and production-ready
+Current watermark settings:
+	•	fontSize = 12
+	•	opacity = 0.16
+	•	rowGap = 22
+	•	stagger offset based on unit text width
 
----
+Important Helper Structure in server.js
 
-## 🧭 Resume Point for Next Session
+Current backend structure includes:
+	•	requireSecret(...)
+	•	requirePracticeUiSecret(...)
+	•	processPrescriptionAttachment(...)
+	•	/process-prescription-attachments
+	•	/api/issue-and-process
+	•	/health
 
-“Let’s wire the processor into the prescription issue/upload flow so previews are generated automatically.”
+The processPrescriptionAttachment(...) helper centralises:
+	•	download from storage
+	•	clean dispense PDF creation
+	•	preview watermark generation
+	•	upload of processed files
+	•	DB update of attachment fields
+
+Key Lessons Learned
+	•	Missing environment variables on Railway cause full startup crash
+	•	Railway changes must actually be deployed, not just edited
+	•	Browser errors like “Load failed” can hide CORS/preflight issues
+	•	The real product architecture needs a backend orchestration layer
+	•	It was correct to separate practice and pharmacy UIs
+	•	The processor should be hosted, not run from a laptop, for real demos
+
+Current Limitations
+	•	Practice UI still uses shared secret in browser code
+	•	No real auth yet
+	•	No polished success state yet
+	•	No copy button for Rx code yet
+	•	No direct handoff from practice UI to pharmacy UI yet
+	•	Error handling is basic
+	•	Security model is MVP-only
+
+Recommended Next Steps
+
+Immediate UI polish
+	•	Improve practice success screen
+	•	Display Rx code more clearly
+	•	Add copy button
+	•	Add direct link or handoff to pharmacy page
+
+Security improvements
+	•	Replace shared secret with real authentication
+	•	Move toward practice-level auth and role separation
+
+Product hardening
+	•	Better logging
+	•	Better error messages
+	•	More robust storage policy review
+	•	Cleaner production security model
+
+Summary
+
+The system is now a real hosted MVP with:
+	•	Practice-side issuing UI
+	•	Hosted Railway backend
+	•	Supabase database and storage
+	•	Working PDF processing
+	•	Working watermarking
+	•	Separate pharmacy-side preview/dispense UI
+
+This is now suitable for demonstration, but not yet production-grade from a security perspective.
+
+Resume Point
+
+When resuming, start with:
+
+“Improve the practice success screen and then tighten security/auth.”
