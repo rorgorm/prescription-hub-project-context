@@ -4,6 +4,8 @@ Last Updated
 
 2026-03-31
 
+⸻
+
 Overview
 
 This project is a minimal end-to-end prescription processing system designed to demonstrate:
@@ -12,6 +14,8 @@ This project is a minimal end-to-end prescription processing system designed to 
 	•	Pharmacy-side preview and dispense flow
 
 The system is intentionally simple, with minimal infrastructure and no reliance on local tools or manual database interaction.
+
+⸻
 
 Architecture
 
@@ -25,28 +29,37 @@ Frontend (Practice)
 	•	Upload prescription PDF
 	•	Submit in a single action
 
+⸻
+
 Backend
 	•	Node.js (Express) server hosted on Railway
-	•	Main endpoints:
+
+Main endpoints:
 	•	POST /api/issue-and-process
 	•	POST /process-prescription-attachments
 	•	GET /health
 
-Responsibilities of /api/issue-and-process:
-	•	Validate request
+/api/issue-and-process responsibilities:
+	•	Validate request (including PRACTICE_UI_SECRET)
+	•	Upload file to Supabase Storage
 	•	Call Supabase RPC to issue prescription
 	•	Trigger processing logic
-	•	Return Rx code and processed attachment paths
+	•	Return Rx code + processed attachment paths
 
-Responsibilities of /process-prescription-attachments:
+/process-prescription-attachments responsibilities:
 	•	Process an already-issued prescription
 	•	Generate preview and dispense PDFs
+	•	Upload processed files
 	•	Update database attachment fields
+
+⸻
 
 Database & Storage (Supabase)
 	•	PostgreSQL database with RPC functions
 	•	Storage bucket:
 	•	prescription-attachments
+
+⸻
 
 Current Working State
 
@@ -59,52 +72,55 @@ The following are now working:
 	•	preview PDF
 	•	dispense PDF
 	•	Existing pharmacy-side HTML remains separate and continues to handle preview/dispense flow
-	•	Manual SQL and manual curl are no longer required for the practice-side issuing workflow
+	•	Manual SQL and manual curl are no longer required
+
+⸻
 
 Practice UI (Minimal Friction MVP)
 
-Current inputs on practice.html:
+Inputs
 	•	Prescriber
 	•	Validity period
-	•	Controlled drug checkbox
-	•	defaults to No
+	•	Controlled drug checkbox (defaults to No)
 	•	Prescription PDF upload
 
-Current behaviour:
+Behaviour
 	1.	User selects prescriber
 	2.	User selects validity period
 	3.	User optionally ticks controlled drug
 	4.	User uploads PDF
 	5.	User clicks “Upload and issue prescription”
-	6.	Frontend uploads file to Supabase Storage
-	7.	Frontend calls Railway backend /api/issue-and-process
-	8.	Backend issues prescription and processes files
-	9.	UI returns Rx code
+	6.	Frontend sends file + metadata to Railway backend
+	7.	Backend handles upload, issuing, and processing
+	8.	Response returned with Rx code
+
+⸻
 
 Pharmacy UI
 
-Existing pharmacy HTML is still used and remains separate from the practice UI.
+Existing pharmacy HTML remains separate.
 
 Purpose:
 	•	Enter or use Rx code
 	•	View watermarked preview
 	•	Dispense prescription
 
-This separation is intentional:
-	•	Practice UI = issue
-	•	Pharmacy UI = preview/dispense
+Design decision:
+	•	Practice UI = issuing
+	•	Pharmacy UI = checking / dispensing
+
+⸻
 
 Backend Hosting
-
-Backend is now hosted on Railway.
+	•	Hosted on Railway
 
 Public domain:
-	•	https://prescription-processor-production.up.railway.app
+https://prescription-processor-production.up.railway.app
 
 Health endpoint:
-	•	/health
+/health
 
-The processor is no longer dependent on local localhost.
+⸻
 
 Environment Variables (Railway)
 
@@ -116,67 +132,76 @@ Required service-level variables:
 	•	BUCKET_NAME
 
 Notes:
-	•	Missing variables cause startup failure
-	•	A previous Railway crash was caused by missing PRACTICE_UI_SECRET
-	•	Variables must be correctly deployed at service level
+	•	Missing variables cause full server crash at startup
+	•	Previous failure was due to missing PRACTICE_UI_SECRET
+	•	Variables must be deployed (not just saved)
+
+⸻
 
 Security Model (Current MVP)
 
 Current state:
-	•	Practice UI uses a shared secret via Authorization: Bearer ...
-	•	Backend validates PRACTICE_UI_SECRET
+	•	Practice UI sends:
+	•	Authorization: Bearer PRACTICE_UI_SECRET
+	•	Backend validates via requirePracticeUiSecret(...)
 
-Important limitation:
-	•	This secret is currently present in frontend code
-	•	This is acceptable only for controlled MVP/demo use
-	•	This is not the final production security model
+Limitations:
+	•	Secret is exposed in frontend code
+	•	No authentication or user identity
+	•	No role separation
 
 Future direction:
-	•	Replace shared secret with proper authentication
-	•	Add practice accounts and role-based access
+	•	Replace with proper authentication (e.g. Supabase Auth)
+	•	Introduce practice accounts
+	•	Add role-based access control
+
+⸻
 
 CORS
 
-CORS needed to be enabled because practice.html is browser-based and calls Railway directly.
+Required because:
+	•	practice.html runs in browser
+	•	Uses Authorization header
+	•	Triggers preflight OPTIONS requests
 
-This was required due to:
-	•	Browser preflight OPTIONS requests
-	•	Authorization header in fetch requests
-
-Without proper CORS handling, browser showed:
+Symptoms before fix:
 	•	“Load failed”
-	•	preflight 502 / blocked fetch errors
+	•	502 / blocked preflight
+
+⸻
 
 Supabase Storage
 
 Bucket:
-	•	prescription-attachments
+prescription-attachments
 
-Current relevant policy state:
-	•	Public read policy exists
-	•	Upload path is now working in the MVP flow
+Current state:
+	•	Public read policy enabled
+	•	Backend performs uploads using service role key
+
+⸻
 
 Watermarking
 
-Watermark system is now in a good state and considered acceptable.
+System is now stable and accepted.
 
-Current watermark characteristics:
-	•	Horizontal
-	•	Dense
-	•	Edge-to-edge feel
-	•	Repeating phrase includes Rx code
+Characteristics:
+	•	Horizontal layout
+	•	Dense, edge-to-edge coverage
+	•	Includes Rx code
 	•	Brick/stagger pattern
-	•	Final tuning accepted by user
 
-Current watermark settings:
+Settings:
 	•	fontSize = 12
 	•	opacity = 0.16
 	•	rowGap = 22
-	•	stagger offset based on unit text width
+	•	stagger offset based on text width
 
-Important Helper Structure in server.js
+⸻
 
-Current backend structure includes:
+Important Backend Structure (server.js)
+
+Key components:
 	•	requireSecret(...)
 	•	requirePracticeUiSecret(...)
 	•	processPrescriptionAttachment(...)
@@ -184,62 +209,71 @@ Current backend structure includes:
 	•	/api/issue-and-process
 	•	/health
 
-The processPrescriptionAttachment(...) helper centralises:
-	•	download from storage
-	•	clean dispense PDF creation
-	•	preview watermark generation
-	•	upload of processed files
-	•	DB update of attachment fields
+processPrescriptionAttachment(...) handles:
+	•	Download original file
+	•	Generate clean dispense PDF
+	•	Generate preview watermark PDF
+	•	Upload processed files
+	•	Update DB attachment fields
+
+⸻
 
 Key Lessons Learned
-	•	Missing environment variables on Railway cause full startup crash
-	•	Railway changes must actually be deployed, not just edited
-	•	Browser errors like “Load failed” can hide CORS/preflight issues
-	•	The real product architecture needs a backend orchestration layer
-	•	It was correct to separate practice and pharmacy UIs
-	•	The processor should be hosted, not run from a laptop, for real demos
+	•	Missing environment variables = total server crash
+	•	Railway changes must be deployed to take effect
+	•	CORS/preflight issues can appear as generic browser failures
+	•	Backend orchestration layer is essential
+	•	Hosting > local server for real-world workflow
+	•	Separation of practice vs pharmacy UI is correct
+
+⸻
 
 Current Limitations
-	•	Practice UI still uses shared secret in browser code
-	•	No real auth yet
-	•	No polished success state yet
-	•	No copy button for Rx code yet
-	•	No direct handoff from practice UI to pharmacy UI yet
-	•	Error handling is basic
-	•	Security model is MVP-only
+	•	Shared secret exposed in frontend
+	•	No authentication system
+	•	No polished success UI
+	•	No Rx code copy button
+	•	No direct handoff to pharmacy UI
+	•	Basic error handling only
+	•	Not production-secure
+
+⸻
 
 Recommended Next Steps
 
-Immediate UI polish
-	•	Improve practice success screen
-	•	Display Rx code more clearly
+Immediate (UI polish)
+	•	Show Rx code clearly
 	•	Add copy button
-	•	Add direct link or handoff to pharmacy page
+	•	Add link to pharmacy view
 
-Security improvements
-	•	Replace shared secret with real authentication
-	•	Move toward practice-level auth and role separation
+Security
+	•	Replace shared secret with authentication
+	•	Add practice-level identity
 
-Product hardening
-	•	Better logging
-	•	Better error messages
-	•	More robust storage policy review
-	•	Cleaner production security model
+Hardening
+	•	Improve logging
+	•	Improve error handling
+	•	Review storage security
+	•	Move toward production-grade architecture
+
+⸻
 
 Summary
 
-The system is now a real hosted MVP with:
+The system is now a working hosted MVP with:
 	•	Practice-side issuing UI
-	•	Hosted Railway backend
-	•	Supabase database and storage
-	•	Working PDF processing
-	•	Working watermarking
-	•	Separate pharmacy-side preview/dispense UI
+	•	Railway backend
+	•	Supabase database + storage
+	•	Automated PDF processing
+	•	Stable watermarking
+	•	Separate pharmacy UI
 
-This is now suitable for demonstration, but not yet production-grade from a security perspective.
+This is suitable for demonstration, but not production-ready.
+
+⸻
 
 Resume Point
 
-When resuming, start with:
+When resuming:
 
-“Improve the practice success screen and then tighten security/auth.”
+“Improve the practice success screen, then implement authentication.”
