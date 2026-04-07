@@ -1,193 +1,224 @@
-# 📘 Veterinary Prescription Hub – Project Context
+# 📄 Veterinary Prescription Hub – Project Context
 
 ## 🔄 Last Updated
-Date: 2026-04-03
+Date: 2026-04-07
 
 ---
 
-## ✅ Current System State
+## 🚀 Current System State (Working)
 
-### 🎯 Core Flow (Working End-to-End)
-- Prescription issued via Supabase RPC: `issue_prescription`
-- Attachment uploaded (PDF or image)
-- Node processor:
-  - Converts images → PDF (lossless, no cropping)
-  - Generates:
-    - original (canonical file)
-    - dispense.pdf (clean version)
-    - preview.pdf (watermarked)
-- Files stored in Supabase Storage (bucket: prescription-attachments)
-- DB updated with attachment paths + metadata
+### ✅ Authentication & Practice Model
+- Supabase Auth implemented
+- Login = **practice email + password**
+- One login per practice (no individual staff accounts)
+- JWT used for all backend API calls
+- Backend derives `practice_id` from token (`req.practiceId`)
+- No longer passing `practice_id` from frontend (correct design)
 
 ---
 
-## 🧾 Attachment Handling
-
-### Supported Upload Types
-- PDF
-- Images (JPEG, PNG, WEBP, HEIC, HEIF)
-
-### Processing Behaviour
-- Images converted using sharp + pdf-lib
-- No cropping or scaling (1:1 embedding)
-- Orientation corrected
-- No clinical data loss
+### ✅ Practice Profile
+Each practice record contains:
+- `id` (matches Supabase auth user id)
+- `name`
+- `address`
+- `email`
+- `default_validity_days` (currently set to 180)
 
 ---
 
-## 🔁 Replace Attachment (LOW FRICTION)
+### ✅ Prescriber System (Current State)
+- Prescribers stored in `prescribers` table:
+  - `id`
+  - `practice_id`
+  - `vet_name`
+  - `rcvs_number`
+  - `is_active`
 
-### Behaviour
-- Same rx_code retained
-- Replaces:
-  - original
-  - preview
-  - dispense
-
-### Restrictions
-- Blocked if status is:
-  - PARTIALLY_DISPENSED
-  - FULLY_DISPENSED
-  - DISPENSED
-
-### UI
-- Drag & drop supported
-- Accepts PDF + image formats
-- Clear wording (no PDF-only restriction)
-
-### Validation
-- File required (alert)
-- Reason required (alert)
+- UI loads prescribers and populates dropdown at upload
+- Selected `prescriber_id` passed to backend
+- `issue_prescription` correctly validates:
+  - prescriber belongs to practice
+  - prescriber is active
 
 ---
 
-## 🧠 Replace Audit Fields
+### ⚠️ KNOWN ISSUE – PRESCRIBER DUPLICATION (CRITICAL TO FIX NEXT SESSION)
 
-Columns in `prescriptions`:
-- replace_count
-- last_replace_reason
-- last_replaced_at
+Current situation:
+- Two parallel prescriber systems exist:
+  1. `prescribers` table (correct, used by backend)
+  2. `practice_prescribers` table (legacy UI layer)
 
-### Behaviour
-- replace_count increments
-- last_replace_reason updated
-- last_replaced_at updated
+- This caused duplication:
+  - Required creating **two “Rory Gormley” entries**
+  - One in each table
+
+- A **temporary bridge workaround** was implemented:
+  - UI loads from `practice_prescribers`
+  - Uses `prescriber_id` field to map to `prescribers.id`
+
+🚨 This is NOT acceptable long-term.
+
+### 🔧 REQUIRED NEXT STEP (HIGH PRIORITY)
+Remove duplication entirely and simplify:
+
+- Eliminate `practice_prescribers` layer
+- UI should load **directly from `prescribers`**
+- One prescriber = one row = one source of truth
+- No mapping / bridging / duplication
+
+👉 Goal:
+> Clean, single-table prescriber model with zero redundancy
 
 ---
 
-## 🚫 Void Prescription
+### ✅ Prescription Flow (Working End-to-End)
 
-Endpoint: POST /api/void-prescription
+#### Issue Flow
+1. Upload file → Supabase Storage (`incoming/...`)
+2. Call `/api/issue-and-process`
+3. Backend:
+   - Calls `issue_prescription`
+   - Generates `rx_code`
+   - Processes file:
+     - clean PDF
+     - preview PDF (watermarked)
+4. Returns result to UI
 
+#### Replace Attachment Flow
+- Upload new file
+- Reprocess same Rx code
+- Regenerates preview + dispense PDFs
+- Updates audit fields
+
+#### Void Flow
+- Marks prescription as `VOIDED`
+- Stores `void_reason`
+- Prevents further use
+
+---
+
+### ✅ UI Improvements (Latest Session)
+
+#### Loading UX
+- Buttons now show:
+  - spinner
+  - immediate feedback
+  - disabled state
+
+#### Issue Button Flow
+- "Uploading..." during file upload
+- "Processing..." during backend work
+- Spinner stops immediately after success (no UI lock)
+
+#### Replace Attachment Flow
+- Same staged loading UX
+- Includes 60s timeout protection
+
+#### Timeout Protection
+- `AbortController` added to API calls
+- Prevents infinite spinner if backend hangs
+
+---
+
+### ✅ Security Model
+
+#### Backend Middleware
+- `requirePracticeAuth` validates JWT
 - Sets:
-  - status = VOIDED
-  - voided_at
-  - void_reason
+  - `req.practiceUser`
+  - `req.practiceId`
 
-### Principle
-- “Void and forget”
-- No forced reissue
+#### Removed
+- ❌ `practice_id` from frontend payloads
 
----
-
-## 🔄 Void + Reissue
-
-Endpoint: POST /api/void-and-reissue
-
-- Generates new rx_code
-- Links via supersedes_id
-- Voids original
+#### Result
+- Fully secure practice-scoped API
 
 ---
 
-## 📄 Practice UI
+### 🧠 Key Architectural Decisions
 
-### Prescription Log
-Displays:
-- rx_code
-- status
-- reference_text
-- relationships (superseded / replaced)
-
-### Actions
-- View Original
-- View Owner Copy
-- Replace Attachment
-- Void Prescription
-- Edit Reference
+- Practice = single account (not per-user system)
+- Prescriber chosen at upload (not login-based)
+- Backend = source of truth for:
+  - identity
+  - permissions
+- Attachments:
+  - stored in Supabase Storage
+  - processed server-side (Node service)
 
 ---
 
-## 📂 Storage Structure
+### ⚙️ Backend (Node / Railway)
 
-{prescription_id}/
-  ├── original.{ext}
-  ├── dispense.pdf
-  └── preview.pdf
-
----
-
-## ⚙️ Backend (Node / Railway)
-
-### Endpoints
-- /api/issue-and-process
-- /api/replace-attachment
-- /api/void-prescription
-- /api/void-and-reissue
-- /api/practice-prescriptions
-- /process-prescription-attachments
-- /health
-
-### Security
-- PROCESSOR_SECRET
-- PRACTICE_UI_SECRET
+Handles:
+- PDF generation (pdf-lib)
+- Image → PDF conversion (sharp)
+- Preview watermarking
+- Storage management
+- API endpoints:
+  - issue-and-process
+  - replace attachment
+  - void
+  - fetch prescriptions
 
 ---
 
-## 🧪 Known Working Behaviour
+### 📌 Current Status
 
-- Replace works correctly
-- Replace blocked after dispense
-- Void works independently
-- Watermark fixed
-- Drag & drop working
-- Alerts prevent silent failures
-
----
-
-## ⚠️ Known Limitations
-
-- No full attachment history
-- Alerts instead of inline validation
-- Large images → large PDFs
-- No multi-page image support
+✅ Login working  
+✅ Logout working  
+✅ Prescriber selection working  
+✅ Issue flow working  
+✅ Replace flow working  
+✅ Void flow working  
+✅ Prescription list + filters working  
+✅ Reference saving working  
+✅ Loading UX improved  
 
 ---
 
-## 🧭 Design Principles
+## 🔜 NEXT SESSION PRIORITIES
 
-1. Friction minimisation
-2. Clinical safety
-3. Lightweight audit
-4. Clear separation (replace ≠ void ≠ reissue)
-
----
-
-## 🧠 Current Position
-
-Functional MVP with real-world usability
+### 🔴 1. FIX PRESCRIBER ARCHITECTURE (TOP PRIORITY)
+- Remove `practice_prescribers`
+- Refactor UI to use `prescribers` directly
+- Remove all bridging logic
+- Ensure clean 1:1 data model
 
 ---
 
-## 🔜 Next Phase Options
+### 🟡 2. UX POLISH
+- Add spinner to login button
+- Optional: progress stages (Uploading → Processing → Done)
 
-### UX
-- Inline validation
-- Replace indicators
-- Toast messages
+---
 
-### Audit
-- Full version history (optional)
+### 🟡 3. OPTIONAL IMPROVEMENTS
+- Better error surfacing from backend
+- File upload progress (nice-to-have)
+- Cleaner success state UI
 
-### Processing
-- A4 scaling (optional)
+---
+
+## 💡 DESIGN PRINCIPLE (IMPORTANT REMINDER)
+
+Avoid:
+> “Temporary fixes” or “bridging layers”
+
+Aim for:
+> Clean, single-source-of-truth data model  
+> Minimal moving parts  
+> Low-friction for real-world practice use  
+
+---
+
+## 🧭 Resume Point
+
+Next session should begin with:
+
+> **Refactoring prescriber system to remove duplication and eliminate practice_prescribers entirely**
+
+---
