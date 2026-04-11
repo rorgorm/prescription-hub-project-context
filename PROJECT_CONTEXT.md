@@ -1,300 +1,261 @@
-# Veterinary Prescription Hub – Unified JWT Auth Migration State
+Veterinary Prescription Hub – Unified JWT Auth System (Clean State)
 
-## 🔄 Last Updated
-Date: 2026-04-10
+🔄 Last Updated
 
----
+Date: 2026-04-11
 
-## ✅ Current Status (WORKING)
+⸻
 
-### Practice UI
-- Supabase Auth login implemented
-- One login per practice
-- JWT used for backend API calls
-- Practice identity derived from token, not frontend payload
-- Logout works
-- Logged-in email shown in UI
-- Enter/return key works at login
-- Prescriber dropdown now loads directly from `prescribers`
-- `practice_prescribers` is no longer used by `practice.html`
-- Prescriber duplication bridge has been removed from frontend usage
+✅ Current Status (STABLE & WORKING)
 
-### Pharmacy UI
-- Supabase Auth login implemented
-- UI gated behind login (`loginCard` → `mainApp`)
-- Logout button added and working
-- Session persists correctly across reloads
-- Preview works via JWT
-- Watermarked preview PDF works via JWT
-- Full dispense works via JWT
-- Unlocked dispense attachment works via JWT
-- Start partial dispense works via JWT
-- Continue partial dispense works via JWT
-- Dispense all remaining items works via JWT
-- Pharmacy API key is no longer needed in live workflow
+Practice UI
+	•	Supabase Auth login implemented
+	•	JWT used for all backend API calls
+	•	Practice identity derived from auth.uid()
+	•	Login secured (no information leakage)
+	•	No success message before role validation
+	•	Logged-in email displayed
+	•	Logout button working
+	•	Enter/return key submits login
+	•	Session persists correctly with isolated storage key
+	•	Prescribers loaded directly from prescribers
+	•	practice_prescribers no longer used
 
----
+Pharmacy UI
+	•	Supabase Auth login implemented
+	•	JWT used for all RPC calls
+	•	Pharmacy identity derived from auth.uid()
+	•	UI gated behind login (loginCard → mainApp)
+	•	Login hardened (no success flash, no role leakage)
+	•	Logged-in email displayed
+	•	Logout button working
+	•	Enter/return key submits login
+	•	Session persists correctly with isolated storage key
 
-## 🧠 Core Architectural Position
+⸻
 
-The system has now moved from:
+🧠 Core Architecture (FINAL MODEL)
 
-- shared secret / API key model
-
+System has fully transitioned from:
+	•	API key authentication ❌
 to:
+	•	JWT identity-based authentication via Supabase Auth ✅
 
-- identity-based JWT model via Supabase Auth
+Unified rule:
+	•	auth.uid() must match:
+	•	practices.id for practice flows
+	•	pharmacies.id for pharmacy flows
 
-This now applies to both:
-- practices
-- pharmacies
+No frontend identity is trusted.
 
-### New rule
-- `auth.uid()` must match the relevant record in:
-  - `practices.id` for practice flows
-  - `pharmacies.id` for pharmacy flows
+⸻
 
----
+✅ Active JWT Functions (Pharmacy)
+	•	get_prescription_state
+	•	get_prescription_preview_attachment
+	•	full_dispense_prescription
+	•	get_prescription_dispense_attachment
+	•	start_partial_dispense
+	•	continue_partial_dispense
 
-## ✅ Current Live Auth Model
+All:
+	•	derive pharmacy from auth.uid()
+	•	enforce pharmacies.is_active = true
 
-### Practices
-- Login with email/password
-- Backend trusts JWT
-- `req.practiceId` derived from token
-- No frontend `practice_id` trust
-- No frontend practice secret usage
+⸻
 
-### Pharmacies
-- Login with email/password
-- RPC functions trust `auth.uid()`
-- No live dependency on `p_api_key`
-- No live dependency on `pharmacy_api_keys`
+✅ Practice Backend Model
 
----
+Practice backend (Railway API):
+	•	Authenticated via Bearer JWT
+	•	Practice derived from token server-side
+	•	No frontend practice_id or secrets used
 
-## ✅ Working JWT Functions
+Endpoints:
+	•	issue-and-process
+	•	practice-prescriptions
+	•	void-prescription
+	•	replace-attachment
+	•	update-prescription-reference
 
-### Pharmacy JWT functions now in use
-- `get_prescription_state`
-- `get_prescription_preview_attachment`
-- `full_dispense_prescription`
-- `get_prescription_dispense_attachment`
-- `start_partial_dispense`
-- `continue_partial_dispense`
+⸻
 
-### Practice-side core flow
-- issue-and-process via JWT-authenticated backend
-- replace attachment via JWT-authenticated backend
-- void prescription via JWT-authenticated backend
-- update identifier/reference via JWT-authenticated backend
+✅ Prescription Flow (END-TO-END)
 
----
+Practice:
+	1.	Login
+	2.	Upload prescription
+	3.	Issue via backend
+	4.	Optional reference added
+	5.	Appears in prescription list
 
-## ✅ Prescriber Model
+Pharmacy:
+	1.	Login
+	2.	Enter Rx code
+	3.	Preview prescription (JWT)
+	4.	View watermarked PDF
+	5.	Choose:
+	•	Full dispense
+	•	Start partial dispense
+	•	Continue partial dispense
+	•	Dispense remaining items
+	6.	Access unlocked attachment after dispense
 
-### Current correct source of truth
-- `prescribers`
+⸻
 
-Columns include:
-- `id`
-- `practice_id`
-- `vet_name`
-- `rcvs_number`
-- `is_active`
+✅ Partial Dispense System
 
-### Important outcome
-- `practice.html` now loads prescribers directly from `prescribers`
-- duplicate "Rory Gormley" bridge logic is no longer used in the UI
-- one prescriber source of truth is now established at frontend level
+prescription_items table
 
----
+Columns:
+	•	id
+	•	prescription_id
+	•	line_number (required)
+	•	drug_description
+	•	quantity_prescribed
+	•	quantity_dispensed
+	•	quantity_remaining
+	•	status
+	•	created_at
 
-## ✅ Pharmacy Partial Dispense Model
+Behaviour:
+	•	Start partial → creates item rows with line_number
+	•	Continue partial → updates quantities
+	•	Dispense remaining → completes all
+	•	State reflects correctly in UI
 
-### `prescription_items` table includes
-- `id`
-- `prescription_id`
-- `line_number`
-- `drug_description`
-- `quantity_prescribed`
-- `quantity_dispensed`
-- `quantity_remaining`
-- `status`
-- `created_at`
+⸻
 
-### Working behaviour
-- Start partial dispense creates item rows
-- Continue partial dispense updates remaining quantities
-- Dispense all remaining items works
-- Prescription state refreshes correctly
-- Itemised mode now returned correctly from `get_prescription_state`
+✅ Session Isolation (CRITICAL FIX)
 
----
+Each UI uses its own Supabase storage key:
 
-## ⚠️ Legacy Code Still Present (NOT USED BY LIVE UI)
+Practice:
+storageKey: “vet-hub-practice-auth”
 
-### Legacy SQL functions still exist
-- `check_prescription_with_key`
-- `continue_partial_dispense_with_key`
-- `flag_prescription_issue_with_key`
-- `full_dispense_prescription_with_key`
-- `get_prescription_attachment_with_key`
-- `get_prescription_dispense_attachment_with_key`
-- `get_prescription_preview_attachment_with_key`
-- `get_prescription_state_with_key`
-- `start_partial_dispense_with_key`
+Pharmacy:
+storageKey: “vet-hub-pharmacy-auth”
 
-### Legacy table still exists
-- `pharmacy_api_keys`
+Outcome:
+	•	Practice and pharmacy sessions do NOT interfere
+	•	Eliminates cross-login contamination bug
 
-### Important note
-These appear to be legacy only and are no longer used by the live `pharmacy.html`, but they have not yet been retired from the database.
+⸻
 
----
+✅ Security Hardening
 
-## 🚧 High-Priority Cleanup Next Session
+Login behaviour:
+	•	No success message before role validation
+	•	Generic failure message:
+“Invalid email or password.”
 
-### 1. Retire legacy API-key pharmacy code
-Goal:
-- remove all unnecessary old code still present in database
+Prevents:
+	•	account enumeration
+	•	role leakage
 
-Planned actions:
-- verify no current frontend or backend path still references `_with_key`
-- drop all legacy `_with_key` SQL functions
-- drop `pharmacy_api_keys` table
+Role validation:
+	•	Practice UI checks practices.id = auth.uid()
+	•	Pharmacy UI checks pharmacies.id = auth.uid()
 
-This is important for:
-- tidiness
-- reducing bug surface area
-- preventing accidental use of old auth model
-- making the system easier to reason about
+If mismatch:
+	•	forced logout
+	•	generic error shown
 
----
+⸻
 
-### 2. Pharmacy UI polish / parity with practice UI
-Need to ensure `pharmacy.html` matches `practice.html` standards:
+🧹 Legacy System (REMOVED)
 
-#### Required
-- show logged-in email at top of UI
-- keep logout button visible and working
-- make return/enter key submit login form
-- reduce ambiguity about which account is signed in
+Deleted:
+	•	pharmacy_api_keys table
+	•	ALL _with_key SQL functions
 
-Note:
-- practice UI already behaves correctly here
-- pharmacy UI needs to match it cleanly
+Result:
+	•	Single authentication model
+	•	No parallel systems
+	•	Reduced bug surface area
+	•	Cleaner architecture
 
----
+⸻
 
-### 3. Remove obsolete UI remnants from `pharmacy.html`
-Need to confirm and clean:
-- no API key input field remains
-- no `apiKeyInput`
-- no `apiKey`
-- no `_with_key` references
-- `getInputs()` should return only:
-  - `rxCode`
+🐛 Issues Encountered (ALL RESOLVED)
 
----
+ACTIVE_PHARMACY_NOT_FOUND
+	•	Cause: wrong user logged in
+	•	Fix: role enforcement + session isolation
 
-### 4. Confirm no obsolete bridge/dead code remains in practice flow
-Goal:
-- ensure `practice_prescribers` is no longer needed anywhere
-- ensure no dead prescriber bridge logic remains
-- leave one clean prescriber path only
+Cross-session login bug
+	•	Cause: shared localStorage
+	•	Fix: separate storageKey
 
----
+Success flash on login
+	•	Cause: message before role validation
+	•	Fix: removed premature success
 
-## 🐛 Important Issues Encountered and Resolved
+Invalid API key errors
+	•	Cause: legacy functions
+	•	Fix: full JWT migration
 
-### ACTIVE_PHARMACY_NOT_FOUND
-Cause:
-- logged in as non-pharmacy user
+line_number null error
+	•	Cause: not set during insert
+	•	Fix: enforced numbering
 
-Fix:
-- pharmacy JWT flow must use a user whose `auth.uid()` matches `pharmacies.id`
+Function overload conflict
+	•	Cause: duplicate continue_partial_dispense
+	•	Fix: removed integer version
 
-### Invalid API key
-Cause:
-- old post-dispense / attachment path still called legacy `_with_key` function
+Unwatermarked preview
+	•	Cause: wrong RPC used
+	•	Fix: corrected preview function
 
-Fix:
-- migrated dispense attachment loading to JWT function
+⸻
 
-### record has no field "email"
-Cause:
-- JWT full dispense function referenced non-existent `pharmacies.email`
-
-Fix:
-- removed email reference from function
-
-### No partial dispense mode is active
-Cause:
-- `partialMode` was being set before `resetPartialMode()`, which nulled it out
-
-Fix:
-- always call `resetPartialMode()` first, then set `partialMode`
-
-### null value in column "line_number" violates not-null constraint
-Cause:
-- `start_partial_dispense` did not populate `line_number`
-
-Fix:
-- assign incrementing `line_number` during item creation
-
-### Could not choose best candidate function
-Cause:
-- duplicate overloaded `continue_partial_dispense` functions existed (`integer` and `numeric`)
-
-Fix:
-- removed old integer version, kept numeric version only
-
-### Itemised prescription still showing as unitemised
-Cause:
-- early minimal JWT version of `get_prescription_state` always returned `mode = unitemised`
-
-Fix:
-- replaced with full item-aware version that returns `items` array and `mode = itemised` when appropriate
-
----
-
-## 🧭 Current Position
+🧭 Current System State
 
 The system is now:
+	•	Fully JWT-authenticated
+	•	Identity-driven (not key-based)
+	•	Cleanly separated (practice vs pharmacy)
+	•	End-to-end functional
+	•	Free of legacy auth paths
+	•	Stable and demo-ready
 
-- JWT-authenticated for both practices and pharmacies
-- functioning end-to-end for issue, preview, replace, void, full dispense, and partial dispense
-- much closer to production architecture
-- still carrying legacy SQL baggage that should now be retired deliberately
+⸻
 
----
+🔜 Next Logical Steps (OPTIONAL)
+	1.	Role metadata (future improvement)
+Store role in Supabase Auth user metadata
+	2.	UI polish
+	•	Display organisation name (not just email)
+	•	Session expiry handling
+	•	Mobile optimisation
+	3.	Owner-facing flow
+	•	Owner receives Rx code
+	•	Owner views prescription summary
+	•	Potential owner portal
 
-## 🔜 Next Session Starting Point
+⸻
 
-Resume from:
+🧩 Design Principles
+	•	One authentication model
+	•	One identity source (JWT)
+	•	No frontend trust
+	•	No parallel systems
+	•	No dead code
+	•	Clear audit trail
 
-1. retire all legacy pharmacy `_with_key` SQL functions
-2. drop `pharmacy_api_keys`
-3. tidy `pharmacy.html` for parity with `practice.html`
-   - logged-in email visible
-   - logout visible
-   - enter key submits login
-4. confirm no obsolete code remains in live paths
+⸻
 
----
+🏁 Summary
 
-## 🧩 Design Principle
+You now have:
 
-Aim for:
-- one authentication model
-- one source of truth
-- minimal dead code
-- minimal hidden legacy paths
-- reduced bug surface area
-- clear, auditable user identity everywhere
+A fully functioning, identity-secure, auditable veterinary prescription system
+with real-world dispensing workflows and clean architecture.
 
-Avoid:
-- parallel auth systems
-- temporary bridges left in place
-- dormant legacy code that could accidentally be re-used
+This is a production-grade foundation ready for further expansion.
+
+⸻
+
+If you want next step, I’d strongly suggest:
+
+👉 building the owner-facing experience — that’s where this becomes genuinely disruptive.
