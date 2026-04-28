@@ -1,196 +1,276 @@
 PROJECT CONTEXT — Veterinary Prescription Hub
-Last updated: 2026-04-15
+Last updated: 2026-04-28
 
 ⸻
 
-CURRENT SYSTEM STATE (STABLE)
+CURRENT SYSTEM STATE (PRODUCTION-STABLE)
 
 AUTHENTICATION
-	•	Supabase JWT-based auth only
-	•	No API keys
-	•	Identity:
-	•	auth.uid() = practices.id
-	•	auth.uid() = pharmacies.id
-	•	Session isolation:
-	•	Practice: vet-hub-practice-auth
-	•	Pharmacy: vet-hub-pharmacy-auth
+• Supabase JWT-based auth only
+• No API keys
+• Identity:
+  • auth.uid() = practices.id
+  • auth.uid() = pharmacies.id
+• Session isolation:
+  • Practice: vet-hub-practice-auth
+  • Pharmacy: vet-hub-pharmacy-auth
 
 ⸻
 
-PRACTICE UI (practice.html)
+CORE WORKFLOWS
 
-Working Features
-	•	Login/logout stable
-	•	Prescribers load correctly
-	•	Upload → Issue → Process flow working
-	•	Reference editable post-issue
-	•	Replace + Void flows working
-	•	Drag/drop upload working
-	•	Prescription list loads and filters correctly
+PRACTICE
+• Upload → Issue → Process working
+• Reference editable post-issue
+• Replace attachment working
+• Void working
+• Owner messaging generated (link + message)
+• Prescription list loads with filters
 
-Owner Messaging (After Issue)
-	•	Owner link generated
-	•	Owner message generated
-	•	Copy buttons:
-	•	Copy owner message
-	•	Copy owner link
+PHARMACY
+• JWT login working
+• Preview (watermarked)
+• Full dispense
+• Partial dispense (start / continue / complete)
+• Attachment unlock logic working
 
-Owner Messaging (Persistent in Log)
-	•	Share dropdown now includes:
-	•	View owner copy (PDF preview)
-	•	Copy owner link
-	•	Copy owner message
-
-Known UX Tweak (Next Task)
-	•	Move “Copy Rx code” into Share dropdown
-
-⸻
-
-PHARMACY UI (COMPLETE)
-	•	JWT login working
-	•	Preview (watermarked)
-	•	Full dispense
-	•	Partial dispense:
-	•	Start
-	•	Continue
-	•	Complete remaining
-	•	Final document unlock
+OWNER
+• No login required
+• Access via:
+  owner.html?rx=RX-XXXX
+• Displays:
+  • Status badge
+  • Issue + expiry
+  • Preview PDF
+  • Partial dispense breakdown (if exists)
 
 ⸻
 
-OWNER UI (owner.html)
+NEW FEATURE — PRESCRIPTION QUERY WORKFLOW (V1 COMPLETE)
 
-Access
-	•	No login required
-	•	Via Rx input OR URL param:
-owner.html?rx=RX-XXXX
-
-Displays
-	•	Status badge (colour coded)
-	•	Issue date
-	•	Expiry date
-	•	Watermarked preview PDF
-	•	Itemised dispensing (only if partial exists)
-
-Enhancements
-	•	Auto-load from URL param
-	•	URL updates on manual entry
-	•	Copy Rx code button
+PURPOSE
+• Replace phone/email friction
+• Allow pharmacy → practice communication inside system
+• Maintain clean audit trail
+• Improve pharmacy-side value (key monetisation driver)
 
 ⸻
 
-STATUS SYSTEM
+DATABASE MODEL
 
-ISSUED → Green → Ready to dispense
-PARTIALLY_DISPENSED → Amber → Partially dispensed
-FULLY_DISPENSED → Grey → Fully dispensed
-EXPIRED → Red → Invalid
-VOIDED → Red → Cancelled
+TABLE: prescription_queries
+
+Fields:
+• id (uuid, PK)
+• prescription_id (uuid, FK → prescriptions.id)
+• raised_by_pharmacy_id (uuid)
+• query_type (enum)
+• query_message (text)
+• practice_response (text)
+• status (enum)
+• created_at (timestamp)
+• resolved_at (timestamp)
+
+ENUM: query_status
+• open
+• responded
+• resolved_by_dispense
+
+ENUM: query_type
+• incorrect_attachment
+• illegible
+• missing_information
+• quantity_query
+• substitution_query
+• controlled_drug_concern
+• other
 
 ⸻
 
-OWNER MESSAGING (FINAL WORDING)
+BACKEND FUNCTIONS
 
-ISSUED
-This is a view-only copy.
-Pharmacies must use your unique Rx code to retrieve the original prescription before supplying medication.
+• raise_prescription_query(p_rx_code, p_query_type, p_query_message)
+• get_prescription_query_for_pharmacy(p_rx_code)
+• get_prescription_query_for_practice(p_rx_code)
+• respond_to_prescription_query(p_query_id, p_response)
 
-PARTIALLY DISPENSED
-This prescription has been partially dispensed.
-A pharmacy must verify the remaining supply using your Rx code.
-
-FULLY DISPENSED
-This prescription has been fully dispensed.
-No further medication can be supplied.
-
-EXPIRED / VOIDED
-This prescription is no longer valid.
-Please contact your veterinary practice.
+IMPORTANT
+• Only ONE version of respond_to_prescription_query exists:
+  (uuid, text)
+• Old overloaded function removed (critical fix)
 
 ⸻
 
-CORE ARCHITECTURE
-	•	Supabase (Postgres + Auth + Storage)
-	•	JWT-only identity model
-	•	Signed URLs for file access
-	•	Node processing service (Railway)
-	•	Preview vs dispense document separation
-	•	Watermarking applied to preview
+QUERY STATE LOGIC
+
+Pharmacy raises query:
+→ status = open
+
+Practice replies:
+→ status = responded
+
+Pharmacy dispenses (full or partial):
+→ status automatically set to resolved_by_dispense (SQL trigger logic)
+
+NO manual “resolve” button exists
+→ resolution is implicit via dispensing (correct design decision)
+
+⸻
+
+PHARMACY UI
+
+• “Raise Prescription Query” button
+• Query panel:
+  • type dropdown
+  • optional message
+• Active query display:
+  • status
+  • pharmacy message
+  • practice response
+
+Behaviour:
+• Query persists until dispense
+• No duplicate queries allowed per prescription
+
+⸻
+
+PRACTICE UI
+
+Per prescription:
+• Query panel appears if query exists
+
+Displays:
+• Status
+• Query type
+• Pharmacy message
+• Practice response (if exists)
+
+Response logic:
+
+STATE 1 — no response
+• textarea + “Send reply”
+
+STATE 2 — responded
+• textarea hidden
+• message:
+  “Reply sent. Awaiting pharmacy review.”
+
+STATE 3 — resolved_by_dispense
+• message:
+  “This query has been resolved.”
+
+CRITICAL UX DECISION
+• No “resolve” button for practice
+• Practice is low-friction party
+• They either:
+  • reply
+  • replace attachment
+  • do nothing
+
+⸻
+
+OWNER UI (UPDATED LOGIC)
+
+If active query exists (status = open OR responded):
+→ show message:
+
+“Your order is currently on hold while the pharmacy checks a prescription query with your veterinary practice. Please wait for this to be resolved.”
+
+If resolved_by_dispense:
+→ normal status messaging resumes
+
+IMPORTANT
+• Owner sees NO query detail
+• Only status abstraction (correct for UX + liability)
 
 ⸻
 
 SECURITY MODEL
-	•	No frontend trust
-	•	No shared secrets
-	•	JWT required for all privileged actions
-	•	Signed URLs (time-limited)
-	•	Preview always watermarked
-	•	No download UI exposed
-	•	Right-click disabled (soft deterrent)
 
-⸻
-
-REMOVED LEGACY
-	•	pharmacy_api_keys table
-	•	*_with_key functions
-	•	Dual auth system
-
-Result
-	•	Cleaner logic
-	•	Lower bug surface
-	•	Easier scaling
+• No frontend trust
+• JWT required for all actions
+• Signed URLs for attachments
+• Preview always watermarked
+• No raw file exposure
+• Query system tied to authenticated roles
 
 ⸻
 
 RECENT FIXES
-	•	Login failures due to JS errors
-	•	Missing refreshPrescriptionsSilently
-	•	Duplicate  bug
-	•	Missing function bindings
-	•	Dead UI elements
-	•	Owner link auto-load fixed
+
+• refreshPrescriptionsSilently missing reference bug
+• dropdown duplication / toggle issues
+• query panel wiring (practice + pharmacy)
+• RPC function overloading conflict (PGRST203)
+• submitQueryResponse now correctly exposed via window
+• dropdown auto-close UX polish
+• post-response textarea removal (UX clarity)
 
 ⸻
 
 CURRENT POSITION
-	•	Fully working multi-role system
-	•	Secure prescription lifecycle
-	•	Owner-facing UI live
-	•	GDPR-friendly (no client data stored)
-	•	Production-ready foundation
+
+You now have:
+
+• Full prescription lifecycle
+• Multi-role system (practice / pharmacy / owner)
+• Secure document handling
+• Partial dispensing ledger
+• Integrated communication layer (query workflow)
+• Clean resolution model (implicit via dispense)
+
+→ This is now a genuinely differentiated product
 
 ⸻
 
-NEXT SESSION START
+NEXT SESSION OPTIONS
 
-Immediate task
-	•	Move “Copy Rx code” into Share dropdown
+1. Notifications (HIGH VALUE)
+   • Email trigger on:
+     • query raised
+     • practice reply
+     • attachment replaced
 
-Goal
-	•	Reduce button clutter
-	•	Group all owner-related actions together
+2. Practice-side visual flags
+   • Highlight prescriptions with active queries
+
+3. Pharmacy-side friction reduction
+   • Prevent dispense while query = open (optional rule)
+
+4. Audit / billing hooks
+   • Track queries per pharmacy (future monetisation)
+
+5. UI polish
+   • Inline status badge for queries in list view
 
 ⸻
 
-DESIGN PRINCIPLES
-	•	One auth model
-	•	One identity source (JWT)
-	•	No frontend trust
-	•	Minimal UI noise
-	•	Clear user state
-	•	Real-world usability first
+DESIGN PRINCIPLES (UNCHANGED)
+
+• One auth model (JWT)
+• No frontend trust
+• Minimal friction for practices
+• Pharmacy = value capture layer
+• Owner = simple, abstracted UX
+• Real-world workflow > theoretical purity
 
 ⸻
 
 SUMMARY
 
-You now have a fully functioning veterinary prescription system with:
-	•	Practice workflow
-	•	Pharmacy dispensing control
-	•	Owner visibility layer
-	•	Clean, scalable architecture
+System is now:
+• Functional
+• Secure
+• Scalable
+• Commercially viable
+
+Prescription Query Workflow successfully adds:
+→ real operational value
+→ clear monetisation pathway
+→ reduced friction across all parties
 
 ⸻
 
-Next step when back:
-Refine Share dropdown (include Rx code)
+NEXT STEP WHEN BACK
+
+→ Notifications (this unlocks real-world usability)
